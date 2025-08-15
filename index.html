@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tetris VS AI</title>
+  <style>
+    body { background: #181A2A; color: #fff; font-family: Arial, sans-serif; display: flex; flex-direction: column; align-items: center; }
+    .container { display: flex; gap: 48px; margin-top: 40px; }
+    .board { background: #222; display: grid; grid-template-rows: repeat(20, 24px); grid-template-columns: repeat(10, 24px); gap: 2px; border-radius: 8px; }
+    .cell { width: 24px; height: 24px; background: #2c2c2c; border-radius: 4px; }
+    .filled { background: #49A9EE; }
+    .ai .filled { background: #F46E65; }
+    .stats { text-align: center; margin-bottom: 12px; }
+    .controls { margin-top: 32px; }
+    button, select { font-size: 16px; margin: 0 8px; }
+    h2 { margin: 8px 0 0 0; }
+    #game-over { font-size: 2em; color: #FFD700; margin-top: 24px; display: none; }
+    .next-container { display: flex; flex-direction: column; align-items: center; margin-top: 12px; }
+    .next-label { font-size: 0.95em; margin-bottom: 2px; color: #FFD700; }
+    .next-board { display: grid; grid-template-rows: repeat(4, 20px); grid-template-columns: repeat(4, 20px); gap: 2px; background: #222; border-radius: 6px; margin-bottom: 6px; }
+    .menu { background: #23244a; border-radius: 8px; padding: 16px 24px; margin-bottom: 24px; box-shadow: 0 2px 8px #0003; }
+    .menu h3 { margin-top: 0; }
+    .menu ul { margin: 0 0 8px 20px; padding: 0; }
+    .menu label, .menu select { font-size: 1em; }
+    .flash {
+      animation: flashline 0.25s 2 alternate;
+    }
+    @media (max-width: 700px) {
+      .container { flex-direction: column; gap: 16px; margin-top: 12px; }
+      .board { grid-template-rows: repeat(20, 7vw); grid-template-columns: repeat(10, 7vw); }
+      .cell { width: 7vw; height: 7vw; }
+      .menu { padding: 12px 10px; }
+      h1 { font-size: 1.3em; }
+      h2 { font-size: 1.1em; }
+    }
+    #mobile-controls {
+      display: none;
+      margin: 12px 0;
+      justify-content: center;
+      gap: 12px;
+    }
+    @media (max-width: 700px) {
+      #mobile-controls { display: flex; }
+    }
+    @keyframes flashline {
+      0%   { background: #fff !important; }
+      100% { background: #FFD700 !important; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Tetris VS AI</h1>
+  <div class="menu" id="main-menu">
+    <h3>Controls</h3>
+    <ul>
+      <li><b>Left/Right Arrow</b>: Move piece left/right</li>
+      <li><b>Down Arrow</b>: Soft drop</li>
+      <li><b>Up Arrow</b>: Rotate</li>
+      <li><b>Space</b>: Hard drop</li>
+    </ul>
+    <label for="difficulty">AI Difficulty:</label>
+    <select id="difficulty">
+      <option value="easy">Easy</option>
+      <option value="medium" selected>Medium</option>
+      <option value="hard">Hard</option>
+    </select>
+    <button id="start-btn">Start</button>
+    <button id="restart-btn" style="display:none;">Restart</button>
+  </div>
+  <div class="container" id="game-area" style="display:none;">
+    <div>
+      <div class="stats">
+        <h2>Player</h2>
+        <span id="player-score">Score: 0</span>
+      </div>
+      <div class="next-container">
+        <div class="next-label">Next</div>
+        <div id="player-next" class="next-board"></div>
+        <div class="next-label">Next Next</div>
+        <div id="player-next-next" class="next-board"></div>
+      </div>
+      <div id="player-board" class="board"></div>
+    </div>
+    <!-- Add after your main menu or game area -->
+    <div id="mobile-controls">
+      <button onclick="moveLeft()">◀️</button>
+      <button onclick="rotatePiece()">🔄</button>
+      <button onclick="moveRight()">▶️</button>
+      <button onclick="softDrop()">⬇️</button>
+      <button onclick="hardDrop()">⏬</button>
+    </div>
+    <div>
+      <div class="stats">
+        <h2>AI</h2>
+        <span id="ai-score">Score: 0</span>
+      </div>
+      <div class="next-container">
+        <div class="next-label">Next</div>
+        <div id="ai-next" class="next-board"></div>
+        <div class="next-label">Next Next</div>
+        <div id="ai-next-next" class="next-board"></div>
+      </div>
+      <div id="ai-board" class="board ai"></div>
+    </div>
+  </div>
+  <div id="game-over"></div>
+  <script>
+    // TETRIS CONSTANTS
+    const ROWS = 20, COLS = 10;
+    const SHAPES = [
+      [[1,1,1,1]], // I
+      [[1,1],[1,1]], // O
+      [[0,1,0],[1,1,1]], // T
+      [[1,0,0],[1,1,1]], // J
+      [[0,0,1],[1,1,1]], // L
+      [[1,1,0],[0,1,1]], // S
+      [[0,1,1],[1,1,0]]  // Z
+    ];
+    const COLORS = ['#49A9EE','#FFD700','#61E294','#F46E65','#AB47BC','#FFA940','#13C2C2'];
+
+    // SHARED PIECE QUEUE
+    let pieceQueue = [];
+
+    function refillQueue() {
+      while (pieceQueue.length < 10) {
+        // Shuffle all 7 shapes (bag randomizer)
+        let bag = [];
+        for (let i = 0; i < SHAPES.length; i++) bag.push(i);
+        for (let i = bag.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [bag[i], bag[j]] = [bag[j], bag[i]];
+        }
+        pieceQueue.push(...bag);
+      }
+    }
+    function nextShapeFromQueue() {
+      refillQueue();
+      const idx = pieceQueue.shift();
+      return {
+        shape: SHAPES[idx].map(row => row.slice()),
+        colorIdx: idx
+      };
+    }
+
+    // GAME STATE
+    let player = {}, ai = {}, playerBoardDiv, aiBoardDiv;
+    let playerInterval, aiInterval, aiMoveInterval;
+    let isGameOver = false;
+
+    // UTILS
+    function cloneBoard(board) {
+      return board.map(row => row.slice());
+    }
+    function rotate(shape) {
+      // Transpose + reverse rows
+      return shape[0].map((_,i) => shape.map(row => row[i])).reverse();
+    }
+    function collision(board, shape, x, y) {
+      for (let r=0; r<shape.length; r++) {
+        for (let c=0; c<shape[0].length; c++) {
+          if (shape[r][c]) {
+            let nr = r+y, nc = c+x;
+            if (nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS || (board[nr] && board[nr][nc]))
+              return true;
+          }
+        }
+      }
+      return false;
+    }
+    function merge(board, shape, x, y, colorIdx) {
+      let newBoard = cloneBoard(board);
+      for (let r=0; r<shape.length; r++)
+        for (let c=0; c<shape[0].length; c++)
+          if (shape[r][c]) newBoard[r+y][c+x] = colorIdx+1;
+      return newBoard;
+    }
+    // Modify clearLines to return cleared line indices
+    function clearLines(board) {
+      let clearedIndices = [];
+      let newBoard = [];
+      for (let r = 0; r < board.length; r++) {
+        if (board[r].every(cell => cell)) {
+          clearedIndices.push(r);
+        } else {
+          newBoard.push(board[r]);
+        }
+      }
+      let cleared = clearedIndices.length;
+      while (newBoard.length < ROWS)
+        newBoard.unshift(Array(COLS).fill(0));
+      return { board: newBoard, cleared, clearedIndices };
+    }
+    function resetPlayer() {
+      player.board = Array.from({length: ROWS}, ()=>Array(COLS).fill(0));
+      player.score = 0;
+      player.piece = nextShapeFromQueue();
+      player.x = 3; player.y = 0;
+      player.next = nextShapeFromQueue();
+      player.nextNext = nextShapeFromQueue();
+    }
+    function resetAI() {
+      ai.board = Array.from({length: ROWS}, ()=>Array(COLS).fill(0));
+      ai.score = 0;
+      ai.piece = {...player.piece}; // Sync with player
+      ai.x = 3; ai.y = 0;
+      ai.next = {...player.next};
+      ai.nextNext = {...player.nextNext};
+    }
+    function drawBoard(div, board, piece, px, py, colorIdx, ghostY) {
+      div.innerHTML = '';
+      for (let r=0; r<ROWS; r++) {
+        for (let c=0; c<COLS; c++) {
+          let cell = document.createElement('div');
+          cell.className = 'cell';
+          if (board[r][c]) {
+            cell.classList.add('filled');
+            cell.style.background = COLORS[board[r][c]-1];
+          }
+          // Draw falling piece
+          if (piece) for (let pr=0; pr<piece.length; pr++)
+            for (let pc=0; pc<piece[0].length; pc++)
+              if (piece[pr][pc] && r===py+pr && c===px+pc) {
+                cell.classList.add('filled');
+                cell.style.background = COLORS[colorIdx];
+              }
+          // Ghost
+          if (ghostY !== undefined && piece) for (let pr=0; pr<piece.length; pr++)
+            for (let pc=0; pc<piece[0].length; pc++)
+              if (piece[pr][pc] && r===ghostY+pr && c===px+pc && !cell.style.background) {
+                cell.style.background = '#666';
+              }
+          div.appendChild(cell);
+        }
+      }
+    }
+    function dropPos(board, piece, x, y) {
+      while (!collision(board, piece, x, y+1)) y++;
+      return y;
+    }
+    function gameOver(board, shape, x, y) {
+      return collision(board, shape, x, y);
+    }
+    function drawNext(div, pieceObj) {
+      div.innerHTML = '';
+      let shape = pieceObj.shape;
+      let color = COLORS[pieceObj.colorIdx];
+      for (let r=0; r<4; r++) {
+        for (let c=0; c<4; c++) {
+          let cell = document.createElement('div');
+          cell.className = 'cell';
+          cell.style.width = '20px';
+          cell.style.height = '20px';
+          cell.style.background = '#2c2c2c';
+          // Center the shape in 4x4 grid
+          if (shape[r] && shape[r][c]) {
+            cell.classList.add('filled');
+            cell.style.background = color;
+          }
+          div.appendChild(cell);
+        }
+      }
+    }
+    function updateDisplay() {
+      drawBoard(playerBoardDiv, player.board, player.piece.shape, player.x, player.y, player.piece.colorIdx, dropPos(player.board, player.piece.shape, player.x, player.y));
+      drawBoard(aiBoardDiv, ai.board, ai.piece.shape, ai.x, ai.y, ai.piece.colorIdx, dropPos(ai.board, ai.piece.shape, ai.x, ai.y));
+      document.getElementById('player-score').textContent = `Score: ${player.score}`;
+      document.getElementById('ai-score').textContent = `Score: ${ai.score}`;
+      drawNext(document.getElementById('player-next'), player.next);
+      drawNext(document.getElementById('player-next-next'), player.nextNext);
+      drawNext(document.getElementById('ai-next'), ai.next);
+      drawNext(document.getElementById('ai-next-next'), ai.nextNext);
+    }
+
+    // PLAYER CONTROLS
+    document.addEventListener('keydown', e => {
+      if (isGameOver) return;
+      if (['ArrowLeft','ArrowRight','ArrowDown','ArrowUp','Space'].includes(e.key)) e.preventDefault();
+      switch(e.key) {
+        case 'ArrowLeft':
+          if (!collision(player.board, player.piece.shape, player.x-1, player.y)) player.x--;
+          break;
+        case 'ArrowRight':
+          if (!collision(player.board, player.piece.shape, player.x+1, player.y)) player.x++;
+          break;
+        case 'ArrowDown':
+          if (!collision(player.board, player.piece.shape, player.x, player.y+1)) player.y++;
+          break;
+        case 'ArrowUp':
+          let rotated = rotate(player.piece.shape);
+          if (!collision(player.board, rotated, player.x, player.y)) player.piece.shape = rotated;
+          break;
+        case ' ':
+        case 'Space':
+          player.y = dropPos(player.board, player.piece.shape, player.x, player.y);
+          break;
+      }
+      updateDisplay();
+    });
+
+    // AI LOGIC
+    function aiEvaluate(board, shape, x, y, difficulty='medium') {
+      // Heuristics: aggregate height, holes, lines, bumpiness
+      let newBoard = merge(board, shape, x, y, 1);
+      let {board: clearedBoard, cleared} = clearLines(newBoard);
+      let aggHeight = 0, holes = 0, bumpiness = 0, prevHeight = -1;
+      for (let c=0; c<COLS; c++) {
+        let colHeight = 0, block = false, colHoles = 0;
+        for (let r=0; r<ROWS; r++) {
+          if (clearedBoard[r][c] && !block) { colHeight = ROWS - r; block = true; }
+          if (!clearedBoard[r][c] && block) colHoles++;
+        }
+        aggHeight += colHeight;
+        holes += colHoles;
+        if (prevHeight >= 0) bumpiness += Math.abs(colHeight - prevHeight);
+        prevHeight = colHeight;
+      }
+      let score = 0;
+      if (difficulty === 'easy') {
+        score = -aggHeight - holes*3 + cleared*10;
+      } else if (difficulty === 'medium') {
+        score = -aggHeight*0.5 - holes*5 + cleared*20 - bumpiness*0.7;
+      } else { // hard
+        score = -aggHeight*0.7 - holes*8 + cleared*25 - bumpiness*1.2;
+      }
+      return score;
+    }
+    function aiFindBestMove(ai, difficulty) {
+      let best = {score: -Infinity, x: ai.x, rot: ai.piece.shape};
+      let original = ai.piece.shape;
+      for (let rot=0; rot<4; rot++) {
+        let shape = original;
+        for (let i=0; i<rot; i++) shape = rotate(shape);
+        for (let x=-2; x<COLS; x++) {
+          let y = 0;
+          while (!collision(ai.board, shape, x, y+1)) y++;
+          if (!collision(ai.board, shape, x, y)) {
+            let score = aiEvaluate(ai.board, shape, x, y, difficulty);
+            if (score > best.score) {
+              best = {score, x, y, rot: shape};
+            }
+          }
+        }
+      }
+      return best;
+    }
+    function aiStep() {
+      if (isGameOver) return;
+      if (!ai.moving) {
+        // Find move
+        let difficulty = document.getElementById('difficulty').value;
+        let move = aiFindBestMove(ai, difficulty);
+        ai.target = move;
+        ai.moving = true;
+      }
+      // Move horizontally
+      if (ai.x < ai.target.x && !collision(ai.board, ai.piece.shape, ai.x+1, ai.y)) ai.x++;
+      else if (ai.x > ai.target.x && !collision(ai.board, ai.piece.shape, ai.x-1, ai.y)) ai.x--;
+      else if (ai.piece.shape !== ai.target.rot) ai.piece.shape = ai.target.rot;
+      else if (!collision(ai.board, ai.piece.shape, ai.x, ai.y+1)) ai.y++;
+      else {
+        // Place
+        ai.board = merge(ai.board, ai.piece.shape, ai.x, ai.y, ai.piece.colorIdx);
+        let {board, cleared, clearedIndices} = clearLines(ai.board);
+        if (cleared > 0) {
+          updateDisplay();
+          flashLines(aiBoardDiv, clearedIndices);
+          setTimeout(() => {
+            ai.board = board;
+            ai.score += [0,100,300,500,800][cleared];
+            ai.piece = { ...player.piece };
+            ai.next = { ...player.next };
+            ai.nextNext = { ...player.nextNext };
+            ai.x = 3; ai.y = 0; ai.moving = false;
+            if (gameOver(ai.board, ai.piece.shape, ai.x, ai.y)) endGame();
+            updateDisplay();
+          }, 500);
+        } else {
+          ai.board = board;
+          ai.score += [0,100,300,500,800][cleared];
+          ai.piece = { ...player.piece };
+          ai.next = { ...player.next };
+          ai.nextNext = { ...player.nextNext };
+          ai.x = 3; ai.y = 0; ai.moving = false;
+          if (gameOver(ai.board, ai.piece.shape, ai.x, ai.y)) endGame();
+          updateDisplay();
+        }
+      }
+      updateDisplay();
+    }
+
+    // Flash lines helper
+    function flashLines(div, lines) {
+      const cells = Array.from(div.children);
+      lines.forEach(r => {
+        for (let c = 0; c < COLS; c++) {
+          let idx = r * COLS + c;
+          if (cells[idx]) cells[idx].classList.add('flash');
+        }
+      });
+      setTimeout(() => {
+        lines.forEach(r => {
+          for (let c = 0; c < COLS; c++) {
+            let idx = r * COLS + c;
+            if (cells[idx]) cells[idx].classList.remove('flash');
+          }
+        });
+      }, 500);
+    }
+
+    // MENU LOGIC
+    document.getElementById('start-btn').onclick = function() {
+      document.getElementById('main-menu').style.display = 'block';
+      document.getElementById('game-area').style.display = '';
+      document.getElementById('start-btn').style.display = 'none';
+      document.getElementById('restart-btn').style.display = '';
+      startGame();
+    };
+    document.getElementById('restart-btn').onclick = function() {
+      startGame();
+    };
+
+    function startGame() {
+      pieceQueue = [];
+      resetPlayer();
+      resetAI();
+      isGameOver = false;
+      document.getElementById('game-over').style.display = 'none';
+      updateDisplay();
+      clearInterval(playerInterval);
+      clearInterval(aiInterval);
+      clearInterval(aiMoveInterval);
+      playerInterval = setInterval(playerStep, 400);
+      aiInterval = setInterval(()=>aiStep(), 250);
+    }
+    function endGame() {
+      isGameOver = true;
+      clearInterval(playerInterval);
+      clearInterval(aiInterval);
+      clearInterval(aiMoveInterval);
+      const overMsg = (player.score > ai.score) ? "Player Wins!" : (player.score < ai.score) ? "AI Wins!" : "Draw!";
+      document.getElementById('game-over').textContent = `Game Over! ${overMsg}`;
+      document.getElementById('game-over').style.display = 'block';
+    }
+
+    function playerStep() {
+        if (isGameOver) return;
+        if (!collision(player.board, player.piece.shape, player.x, player.y+1)) {
+            player.y++;
+            updateDisplay();
+        } else {
+            player.board = merge(player.board, player.piece.shape, player.x, player.y, player.piece.colorIdx);
+            let { board, cleared, clearedIndices } = clearLines(player.board);
+            if (cleared > 0) {
+            updateDisplay();
+            flashLines(playerBoardDiv, clearedIndices);
+            setTimeout(() => {
+                player.board = board;
+                player.score += [0,100,300,500,800][cleared];
+                player.piece = player.next;
+                player.next = player.nextNext;
+                player.nextNext = nextShapeFromQueue();
+                ai.piece = { ...player.piece };
+                ai.next = { ...player.next };
+                ai.nextNext = { ...player.nextNext };
+                player.x = 3; player.y = 0;
+                if (gameOver(player.board, player.piece.shape, player.x, player.y)) endGame();
+                updateDisplay();
+            }, 500);
+            } else {
+            player.board = board;
+            player.score += [0,100,300,500,800][cleared];
+            player.piece = player.next;
+            player.next = player.nextNext;
+            player.nextNext = nextShapeFromQueue();
+            ai.piece = { ...player.piece };
+            ai.next = { ...player.next };
+            ai.nextNext = { ...player.nextNext };
+            player.x = 3; player.y = 0;
+            if (gameOver(player.board, player.piece.shape, player.x, player.y)) endGame();
+            updateDisplay();
+            }
+        }
+        }
+    // mobile control
+    function isMobile() {
+      return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
+    }
+    function moveLeft() {
+      if (!isGameOver && !collision(player.board, player.piece.shape, player.x-1, player.y)) {
+        player.x--; updateDisplay();
+      }
+    }
+    function moveRight() {
+      if (!isGameOver && !collision(player.board, player.piece.shape, player.x+1, player.y)) {
+        player.x++; updateDisplay();
+      }
+    }
+    function rotatePiece() {
+      if (!isGameOver) {
+        let shape = rotate(player.piece.shape);
+        if (!collision(player.board, shape, player.x, player.y)) {
+          player.piece.shape = shape; updateDisplay();
+        }
+      }
+    }
+    function softDrop() {
+      if (!isGameOver && !collision(player.board, player.piece.shape, player.x, player.y+1)) {
+        player.y++; updateDisplay();
+      }
+    }
+    function hardDrop() {
+      if (isGameOver) return;
+      while (!collision(player.board, player.piece.shape, player.x, player.y+1)) {
+        player.y++;
+      }
+      updateDisplay();
+    }
+
+    // INIT
+    window.onload = function() {
+      playerBoardDiv = document.getElementById('player-board');
+      aiBoardDiv = document.getElementById('ai-board');
+      // Hide game area until start
+      document.getElementById('game-area').style.display = 'none';
+      document.getElementById('restart-btn').style.display = 'none';
+      document.getElementById('start-btn').style.display = '';
+      document.getElementById('mobile-controls').style.display = isMobile() ? 'flex' : 'none';
+      // Draw initial next/next-next
+      drawNext(document.getElementById('player-next'), {shape:[[0]],colorIdx:0});
+      drawNext(document.getElementById('player-next-next'), {shape:[[0]],colorIdx:0});
+      drawNext(document.getElementById('ai-next'), {shape:[[0]],colorIdx:0});
+      drawNext(document.getElementById('ai-next-next'), {shape:[[0]],colorIdx:0});
+    }
+  </script>
+</body>
+</html>
